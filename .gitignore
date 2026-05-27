@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Editor / Code Runner (machine-specific; e.g. hardcoded interpreter path)
+.vscode/
+tempCodeRunnerFile.py
+
+# Game runtime artifacts (regenerated on play)
+high_score.txt
