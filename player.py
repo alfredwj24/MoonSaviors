@@ -210,6 +210,8 @@ class Player:
 
         # ---- Jump tracking ----
         self._jump_pressed_last: bool = False   # edge-detect for jump key
+        self._jump_dust_pending: bool = False
+        self._landing_dust_pending: bool = False
 
     # ------------------------------------------------------------------
     # Properties
@@ -371,9 +373,10 @@ class Player:
                     self.velocity_y = 0
                     self.on_ground  = True
 
-                    # Landing dust particles (screen-space position)
-                    if not was_on_ground and self.particle_system:
-                        self.particle_system.landing_dust(self.feet)
+                    # Landing dust is emitted during draw(), where scroll_y is
+                    # available to convert the world-space feet position.
+                    if not was_on_ground:
+                        self._landing_dust_pending = True
 
                     # Notify crumbling platforms that weight is applied
                     if hasattr(plat, "on_player_land"):
@@ -396,6 +399,7 @@ class Player:
         if self.on_ground:
             self.velocity_y = PLAYER_JUMP_FORCE
             self.on_ground  = False
+            self._jump_dust_pending = True
             _play(self._snd_jump)
 
     def use_special(self) -> None:
@@ -474,6 +478,20 @@ class Player:
         screen_x = int(self.x)
         screen_y = int(self.y) - scroll_y
         surface.blit(self._sprite, (screen_x, screen_y))
+        if self._jump_dust_pending:
+            if self.particle_system:
+                self.particle_system.jump_dust((
+                    int(self.x + self.SPRITE_WIDTH // 2),
+                    int(self.y + self.SPRITE_HEIGHT - scroll_y),
+                ))
+            self._jump_dust_pending = False
+        if self._landing_dust_pending:
+            if self.particle_system:
+                self.particle_system.landing_dust((
+                    int(self.x + self.SPRITE_WIDTH // 2),
+                    int(self.y + self.SPRITE_HEIGHT - scroll_y),
+                ))
+            self._landing_dust_pending = False
 
     # ------------------------------------------------------------------
     # Utility
@@ -484,6 +502,8 @@ class Player:
         self.x, self.y = float(x), float(y)
         self.velocity_x = self.velocity_y = 0.0
         self.on_ground  = False
+        self._jump_dust_pending = False
+        self._landing_dust_pending = False
         self.rect.topleft = (int(self.x), int(self.y))
 
     def __repr__(self) -> str:
@@ -563,6 +583,7 @@ class Luna(Player):
             self.velocity_y   = PLAYER_JUMP_FORCE
             self.on_ground    = False
             self._can_double_jump = True    # arm the second jump
+            self._jump_dust_pending = True
             _play(self._snd_jump)
         elif self._can_double_jump:
             # ---- Double jump ----
@@ -718,6 +739,7 @@ class Orion(Player):
         if self.on_ground:
             self.velocity_y = ORION_SUPER_JUMP_FORCE
             self.on_ground  = False
+            self._jump_dust_pending = True
             _play(self._snd_jump)
 
     def magnet_pull(self, platforms: list) -> None:

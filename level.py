@@ -33,9 +33,7 @@ from config import (
     # Physics / scroll
     SCROLL_SPEED, GRAVITY,
     # Platform geometry
-    PLATFORM_WIDTH, PLATFORM_HEIGHT,
-    PLATFORM_CRUMBLE_DELAY,
-    MIN_PLATFORM_GAP, MAX_PLATFORM_GAP,
+    PLATFORM_WIDTH,
     # Comet
     COMET_SPEED_MIN, COMET_SPEED_MAX,
     COMET_SPAWN_INTERVAL, COMET_WIDTH, COMET_HEIGHT,
@@ -73,16 +71,23 @@ from effects import ParticleSystem, ScreenEffect, GlowEffect
 
 PLATFORM_STATIC   = "STATIC"     # platform type identifier
 PLATFORM_CRUMBLE  = "CRUMBLING"  # platform type identifier
+PLATFORM_MOVING   = "MOVING"     # moving platform type identifier
 
 # Shake amplitude (px) applied to crumbling platforms while they wobble
-CRUMBLE_SHAKE_AMP = 3
+CRUMBLE_SHAKE_AMP = 7
 
-# Number of frames a crumbling platform shakes before it actually breaks
-CRUMBLE_WARN_FRAMES = PLATFORM_CRUMBLE_DELAY   # same value, aliased for clarity
+# Cracked platforms begin warning shortly after a player lands, then break
+# after a visible shake period.
+CRUMBLE_WARN_FRAMES = 8
+CRUMBLE_BREAK_FRAMES = FPS * 2
 
 # Horizontal shift applied to each platform during a moonquake (signed random)
 QUAKE_SHIFT_RANGE = MOONQUAKE_PLATFORM_SHIFT    # ± this many pixels
 
+
+# Moving platform tuning
+MOVING_PLATFORM_RANGE = 80
+MOVING_PLATFORM_SPEED = 1.1
 
 # ---------------------------------------------------------------------------
 # ASSET HELPERS
@@ -149,9 +154,8 @@ def _load_platform_img(path: str, display_width: int, display_height: int) -> py
     the image. This function:
       1. Scans row-average brightness to find where content starts.
       2. Crops only the top-face texture rows (first 12% of content band).
-      3. Fills a result surface with a dark-stone body colour.
-      4. Blits the scaled face texture onto the top half of the result.
-    Result: a solid stone-coloured platform bar with real PNG texture on top.
+      3. Blits the scaled face texture onto a transparent result surface.
+    Result: only the platform art is visible; the collision area stays hidden.
     """
     cache_key = (path, display_width, display_height)
     if cache_key in _PLATFORM_IMG_CACHE:
@@ -160,8 +164,6 @@ def _load_platform_img(path: str, display_width: int, display_height: int) -> py
     SAMPLE_STEP         = 8
     CONTENT_THRESH      = 6
     TEXTURE_ROWS_PCT    = 0.12
-    PLATFORM_BODY_COLOR = (55, 60, 70)
-
     try:
         raw = pygame.image.load(path)
         w, h = raw.get_size()
@@ -182,20 +184,27 @@ def _load_platform_img(path: str, display_width: int, display_height: int) -> py
         face_h    = max(8, int(content_h * TEXTURE_ROWS_PCT))
         face_crop = raw.subsurface(pygame.Rect(0, first_content_row, w, face_h))
 
-        result = pygame.Surface((display_width, display_height))
-        result.fill(PLATFORM_BODY_COLOR)
+        result = pygame.Surface((display_width, display_height), pygame.SRCALPHA)
 
         face_display_h = min(display_height, max(6, display_height // 2))
         face_scaled    = pygame.transform.smoothscale(face_crop, (display_width, face_display_h))
+        face_scaled    = face_scaled.convert_alpha()
+        face_scaled.lock()
+        for py in range(face_scaled.get_height()):
+            for px in range(face_scaled.get_width()):
+                r, g, b, a = face_scaled.get_at((px, py))
+                if a == 0 or (r <= 12 and g <= 12 and b <= 12):
+                    face_scaled.set_at((px, py), (r, g, b, 0))
+        face_scaled.unlock()
         result.blit(face_scaled, (0, 0))
 
-        final = result.convert()
+        final = result.convert_alpha()
         _PLATFORM_IMG_CACHE[cache_key] = final
         return final
 
     except (FileNotFoundError, pygame.error):
-        surf = pygame.Surface((display_width, display_height))
-        surf.fill((90, 100, 115))
+        surf = pygame.Surface((display_width, display_height), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (90, 100, 115), (0, 0, display_width, min(10, display_height)))
         _PLATFORM_IMG_CACHE[cache_key] = surf
         return surf
 
@@ -228,9 +237,11 @@ class Platform:
     def __init__(self, x: int, y: int,
                  kind: str = PLATFORM_STATIC,
                  width: int = PLATFORM_WIDTH,
-                 hidden: bool = False):
+                 hidden: bool = False,
+                 move_axis: str = "horizontal",
+                 move_range: int = MOVING_PLATFORM_RANGE,
+                 move_speed: float = MOVING_PLATFORM_SPEED):
 
-        self.rect   = pygame.Rect(x, y, width, PLATFORM_HEIGHT)
         self.kind   = kind
         self.hidden = hidden       # invisible until revealed (Level 2)
         self.revealed  = False     # becomes True when Nova's trail passes over
@@ -238,11 +249,23 @@ class Platform:
 
         self.frozen = False        # True while Orion's freeze special is active
         self.broken = False        # True after crumbling platform shatters
+        self.delta_x = 0
+        self.delta_y = 0
 
         # ---- Crumble state ----
         self._crumble_timer: int  = 0     # frames player has stood here
         self._crumbling: bool     = False  # True during the shake warning phase
         self._shake_offset: int   = 0     # pixel shake applied this frame
+
+        # ---- Moving-platform state ----
+        self._move_axis = move_axis
+        self._move_range = move_range
+        self._move_speed = move_speed
+        self._move_dir = random.choice([-1, 1])
+        self._origin_x = float(x)
+        self._origin_y = float(y)
+        self._move_x = float(x)
+        self._move_y = float(y)
 
         # ---- Visuals ----
         if kind == PLATFORM_CRUMBLE:
@@ -251,6 +274,8 @@ class Platform:
         else:
             self._visual_h = 36
             self._img = _load_platform_img(from_config_PLATFORM_STATIC, width, self._visual_h)
+
+        self.rect = pygame.Rect(x, y, width, self._visual_h)
 
         # ---- Sound ----
         self._snd_crumble = _load_sound(SFX_PLATFORM_CRUMBLE)
@@ -285,24 +310,26 @@ class Platform:
         particles : ParticleSystem
             Used to spawn a debris explosion when the platform breaks.
         """
-        if self.kind != PLATFORM_CRUMBLE or self.broken:
+        if self.broken:
             return
 
+        self.delta_x = 0
+        self.delta_y = 0
+
+        if self.kind == PLATFORM_MOVING and not self.frozen:
+            self._update_movement()
+
         # ---- Shake warning animation ----
-        if self._crumbling:
+        if self.kind == PLATFORM_CRUMBLE and self._crumbling:
             # Oscillate the draw offset so the platform visually rattles.
             # Using the timer modulo gives a repeating left-right pattern.
-            self._shake_offset = (
-                CRUMBLE_SHAKE_AMP
-                if (self._crumble_timer // 4) % 2 == 0
-                else -CRUMBLE_SHAKE_AMP
-            )
+            self._shake_offset = CRUMBLE_SHAKE_AMP if (self._crumble_timer // 2) % 2 == 0 else -CRUMBLE_SHAKE_AMP
             self._crumble_timer += 1
 
             # ---- Break condition ----
-            # Give the player an extra half-second warning after shaking starts
+            # Give the player a short warning after shaking starts
             # before the platform actually disappears.
-            if self._crumble_timer >= CRUMBLE_WARN_FRAMES + FPS // 2:
+            if self._crumble_timer >= CRUMBLE_WARN_FRAMES + CRUMBLE_BREAK_FRAMES:
                 self._break(particles)
 
         # ---- Reveal timer countdown (Level 2 hidden platforms) ----
@@ -310,6 +337,41 @@ class Platform:
             self.reveal_timer -= 1
             if self.reveal_timer == 0:
                 self.revealed = False   # goes dark again
+
+    def _update_movement(self) -> None:
+        """Move this platform inside its configured horizontal/vertical range."""
+        old_x, old_y = self.rect.x, self.rect.y
+
+        if self._move_axis == "vertical":
+            self._move_y += self._move_dir * self._move_speed
+            min_y = self._origin_y - self._move_range
+            max_y = self._origin_y + self._move_range
+            if self._move_y < min_y or self._move_y > max_y:
+                self._move_y = max(min_y, min(max_y, self._move_y))
+                self._move_dir *= -1
+            self.rect.y = int(round(self._move_y))
+        else:
+            self._move_x += self._move_dir * self._move_speed
+            min_x = self._origin_x - self._move_range
+            max_x = self._origin_x + self._move_range
+            if self._move_x < min_x or self._move_x > max_x:
+                self._move_x = max(min_x, min(max_x, self._move_x))
+                self._move_dir *= -1
+            self.rect.x = int(round(self._move_x))
+
+        self.rect.x = max(0, min(SCREEN_WIDTH - self.rect.width, self.rect.x))
+        self._move_x = float(self.rect.x)
+        self._move_y = float(self.rect.y)
+        self.delta_x = self.rect.x - old_x
+        self.delta_y = self.rect.y - old_y
+
+    def shift_horizontal(self, amount: int) -> None:
+        """Move the platform and its movement bounds horizontally."""
+        old_x = self.rect.x
+        self.rect.x = max(0, min(SCREEN_WIDTH - self.rect.width, self.rect.x + amount))
+        applied = self.rect.x - old_x
+        self._origin_x += applied
+        self._move_x = float(self.rect.x)
 
     def _break(self, particles: ParticleSystem) -> None:
         """
@@ -371,6 +433,10 @@ class Platform:
             tint = pygame.Surface((self.rect.width, self._visual_h), pygame.SRCALPHA)
             tint.fill((*COLOR_FREEZE, 100))
             surface.blit(tint, (draw_x, draw_y))
+
+        if self.kind == PLATFORM_MOVING:
+            marker = pygame.Rect(draw_x + 8, draw_y + 4, max(6, self.rect.width - 16), 3)
+            pygame.draw.rect(surface, CYAN, marker)
 
 
 # Patch the class: it references module-level names we haven't set yet.
@@ -471,13 +537,18 @@ class Comet:
             COMET_WIDTH, COMET_HEIGHT,
         )
 
+        if particles:
+            trail_x = int(screen_rect.centerx - self.vx * 8)
+            trail_y = int(screen_rect.centery - self.vy * 6)
+            particles.comet_trail((trail_x, trail_y))
+
         # ---- Platform collision ----
         for plat in platforms:
             if plat.broken:
                 continue
             plat_screen = pygame.Rect(
                 plat.rect.x, plat.rect.y - scroll_y,
-                plat.rect.width, PLATFORM_HEIGHT,
+                plat.rect.width, plat.rect.height,
             )
             if screen_rect.colliderect(plat_screen):
                 self._impact(particles, screen_rect.center)
@@ -581,6 +652,35 @@ def _respawn_on_screen(player, platforms, scroll_y: int) -> None:
 # ---------------------------------------------------------------------------
 # LEVEL 1 — RESCUE MISSION
 # ---------------------------------------------------------------------------
+
+def _carry_players_on_moving_platforms(players, platforms) -> None:
+    """Move grounded players with platforms that shifted this frame."""
+    for player in players:
+        if not getattr(player, "alive", False) or not getattr(player, "on_ground", False):
+            continue
+
+        for plat in platforms:
+            dx = getattr(plat, "delta_x", 0)
+            dy = getattr(plat, "delta_y", 0)
+            if dx == 0 and dy == 0:
+                continue
+            if getattr(plat, "hidden", False) and not getattr(plat, "revealed", False):
+                continue
+
+            old_top = plat.rect.top - dy
+            horizontally_over_platform = (
+                player.rect.right > plat.rect.left and
+                player.rect.left < plat.rect.right
+            )
+            was_on_platform = abs(player.rect.bottom - old_top) <= 8
+            is_on_platform = abs(player.rect.bottom - plat.rect.top) <= 8
+            if horizontally_over_platform and (was_on_platform or is_on_platform):
+                player.x += dx
+                player.y += dy
+                player.rect.x = int(player.x)
+                player.rect.y = int(player.y)
+                break
+
 
 class Level1:
     """
@@ -703,10 +803,22 @@ class Level1:
             x_min, x_max = x_zones[zone_idx]
             x = random.randint(x_min, max(x_min, x_max))
 
-            # Crumbling platforms are rarer now (every 7th) so the climb keeps
-            # plenty of safe footing.
-            kind = PLATFORM_CRUMBLE if i % 7 == 6 else PLATFORM_STATIC
-            self.platforms.append(Platform(x, world_y, kind))
+            # Keep most platforms stable, with occasional cracked/moving ones
+            # to add variety without breaking the main route.
+            if i % 11 == 5:
+                kind = PLATFORM_MOVING
+            elif i % 7 == 6:
+                kind = PLATFORM_CRUMBLE
+            else:
+                kind = PLATFORM_STATIC
+            self.platforms.append(Platform(
+                x,
+                world_y,
+                kind,
+                move_axis=random.choice(["horizontal", "vertical"]),
+                move_range=random.randint(45, 80),
+                move_speed=random.uniform(0.8, 1.2),
+            ))
 
         # ---- Top platform (goal) ----
         self.platforms.append(Platform(
@@ -761,6 +873,7 @@ class Level1:
         # ---- 2. Platforms ----
         for plat in self.platforms:
             plat.update(self.particles)
+        _carry_players_on_moving_platforms(players, self.platforms)
         self.platforms = [p for p in self.platforms if not p.broken]
 
         # Notify Orion if his freeze is active — freeze nearby platforms
@@ -814,8 +927,7 @@ class Level1:
 
         for plat in self.platforms:
             shift = random.randint(-QUAKE_SHIFT_RANGE, QUAKE_SHIFT_RANGE)
-            plat.rect.x = max(0, min(SCREEN_WIDTH - plat.rect.width,
-                                     plat.rect.x + shift))
+            plat.shift_horizontal(shift)
 
         self._quake_timer = MOONQUAKE_INTERVAL
         self.events.append("MOONQUAKE")
@@ -962,7 +1074,8 @@ class Level2:
         # ---- Score / high score ----
         self.score:      int = 0
         self.high_score: int = self._load_high_score()
-        self._last_score_y:  int = -1  # sentinel: initialised to player.y on first frame
+        self._score_start_y: int | None = None
+        self._best_score_y:  int | None = None
         self._height_gained: int = 0   # pixels climbed from starting position
 
         # ---- State ----
@@ -981,6 +1094,8 @@ class Level2:
         # ---- Platforms ----
         self.platforms: list[Platform] = []
         self._highest_platform_y: int  = SCREEN_HEIGHT   # world y of topmost platform
+        self._prev_zone: int = 1
+        self._static_streak: int = 0
 
         # ---- Background ----
         self._bg = _load_image(BG_LEVEL2, (SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -1017,9 +1132,8 @@ class Level2:
             • Horizontally: randomly within one of three horizontal zones
               (left / centre / right), cycling to ensure the path is always
               reachable.
-            • Vertically: between MIN_PLATFORM_GAP and MAX_PLATFORM_GAP pixels
-              above the previous platform, so the jump arcs in config.py are
-              always sufficient to reach the next tile.
+            • Vertically: close to Level 1's platform spacing, so the jump
+              arcs in config.py are always sufficient to reach the next tile.
           Hidden platform chance is applied independently per platform.
           A minimum of 4 consecutive static platforms is enforced before a
           crumbling platform appears (ensuring a safe recovery path always
@@ -1030,30 +1144,30 @@ class Level2:
             (SCREEN_WIDTH // 3, 2 * SCREEN_WIDTH // 3 - PLATFORM_WIDTH),
             (2 * SCREEN_WIDTH // 3, SCREEN_WIDTH - PLATFORM_WIDTH - 30),
         ]
-        zone_idx          = 1    # start centre
-        static_streak     = 0    # consecutive static platforms generated
-
         target_y = self._highest_platform_y - self.GEN_LOOKAHEAD
 
         while self._highest_platform_y > target_y:
             # Vertical placement
-            gap = random.randint(MIN_PLATFORM_GAP, MAX_PLATFORM_GAP)
+            gap = random.randint(70, 92)
             world_y = self._highest_platform_y - gap
 
             # Horizontal placement — move at most ONE zone per step (clamped,
             # never wrapping) so the next platform is always within a single
             # jump of the previous one.
-            zone_idx = max(0, min(2, zone_idx + random.choice([-1, 0, 1])))
-            x_min, x_max = zones[zone_idx]
+            self._prev_zone = max(0, min(2, self._prev_zone + random.choice([-1, 0, 1])))
+            x_min, x_max = zones[self._prev_zone]
             x = random.randint(x_min, max(x_min, x_max))
 
             # Platform type — enforce safe streak before a crumbling platform
-            if static_streak >= 4 and random.random() < 0.35:
-                kind          = PLATFORM_CRUMBLE
-                static_streak = 0
+            if self._static_streak >= 4 and random.random() < 0.18:
+                kind = PLATFORM_MOVING
+                self._static_streak += 1
+            elif self._static_streak >= 5 and random.random() < 0.25:
+                kind = PLATFORM_CRUMBLE
+                self._static_streak = 0
             else:
                 kind = PLATFORM_STATIC
-                static_streak += 1
+                self._static_streak += 1
 
             # Hidden flag — only static platforms can be hidden, and never two
             # hidden platforms in a row (that would leave an uncrossable gap for
@@ -1066,15 +1180,18 @@ class Level2:
                 and random.random() < L2_HIDDEN_PLATFORM_CHANCE
             )
 
-            # Width variation: some platforms are narrower
-            width = random.choice([
-                PLATFORM_WIDTH,
-                PLATFORM_WIDTH,
-                int(PLATFORM_WIDTH * 0.65),
-            ])
+            width = PLATFORM_WIDTH
 
-            self.platforms.append(Platform(x, world_y, kind,
-                                           width=width, hidden=hidden))
+            self.platforms.append(Platform(
+                x,
+                world_y,
+                kind,
+                width=width,
+                hidden=hidden,
+                move_axis=random.choice(["horizontal", "vertical"]),
+                move_range=random.randint(45, 75),
+                move_speed=random.uniform(0.75, 1.15),
+            ))
             self._highest_platform_y = world_y
 
     # ------------------------------------------------------------------
@@ -1124,29 +1241,24 @@ class Level2:
             return
 
         # ---- 1. Height & score ----
-        # Initialise _last_score_y to player starting position on first frame.
+        # Initialise scoring to the highest alive player on the first frame.
         # We cannot do this in __init__ because players are not yet created then.
-        if self._last_score_y < 0:
-            for p in players:
-                if p.alive:
-                    self._last_score_y = int(p.y)
-                    break
+        alive_players = [p for p in players if p.alive]
+        if alive_players:
+            highest_y = int(min(p.y for p in alive_players))
+            if self._score_start_y is None:
+                self._score_start_y = highest_y
+                self._best_score_y = highest_y
 
-        # Height is tracked as the highest world-y reached by any alive player.
-        # In Pygame coords, lower world_y = higher up in the world, so
-        # "climbed" = how many pixels world_y has DECREASED since last check.
-        for player in players:
-            if not player.alive:
-                continue
-            player_world_y = player.y  # already world coordinates
-            climbed = max(0, self._last_score_y - player_world_y)
-            if climbed > 0:
-                self._height_gained += int(climbed)
-                self.score += int(climbed * L2_SCORE_PER_PLATFORM / 100)
-                self._last_score_y = player_world_y
-                if self.score > self.high_score:
-                    self.high_score = self.score
-                    self._save_high_score()
+            # In Pygame coords, lower world_y = higher up in the world.
+            # Score from the total best height reached so sub-pixel/frame
+            # movement cannot be lost to integer truncation.
+            self._best_score_y = min(self._best_score_y, highest_y)
+            self._height_gained = max(0, self._score_start_y - self._best_score_y)
+            self.score = self._height_gained * L2_SCORE_PER_PLATFORM // 100
+            if self.score > self.high_score:
+                self.high_score = self.score
+                self._save_high_score()
 
         # ---- 2. Scroll ----
         # Follow the player who is highest on screen (smallest screen y)
@@ -1171,6 +1283,7 @@ class Level2:
         # ---- 4. Platforms ----
         for plat in self.platforms:
             plat.update(self.particles)
+        _carry_players_on_moving_platforms(players, self.platforms)
 
         # Remove broken or far-below-screen platforms (memory management)
         cull_threshold = self.scroll_y + SCREEN_HEIGHT + 300
@@ -1259,8 +1372,7 @@ class Level2:
 
         for plat in self.platforms:
             shift = random.randint(-QUAKE_SHIFT_RANGE, QUAKE_SHIFT_RANGE)
-            plat.rect.x = max(0, min(SCREEN_WIDTH - plat.rect.width,
-                                     plat.rect.x + shift))
+            plat.shift_horizontal(shift)
 
         self._quake_timer = MOONQUAKE_INTERVAL
         self.events.append("MOONQUAKE")
@@ -1276,8 +1388,7 @@ class Level2:
           2. Platforms (hidden ones only drawn if revealed)
           3. Comets
           4. Particles
-          5. Score overlay
-          6. Screen flash
+          5. Screen flash
         """
         # ---- 1. Background ----
         bg_h  = self._bg.get_height()
@@ -1298,10 +1409,7 @@ class Level2:
         # ---- 4. Particles ----
         self.particles.draw(surface)
 
-        # ---- 5. Score overlay (top-right corner) ----
-        self._draw_score(surface)
-
-        # ---- 6. Flash ----
+        # ---- 5. Flash ----
         self.screen_effect.draw_flash(surface)
 
     def _draw_score(self, surface: pygame.Surface) -> None:

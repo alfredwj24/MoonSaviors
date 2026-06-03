@@ -168,6 +168,52 @@ class ParticleSystem:
                 "age"     : 0,
             })
 
+    def jump_dust(self, pos: tuple[int, int]) -> None:
+        """Emit grey cobblestone-like chips when a player jumps from a platform."""
+        for _ in range(random.randint(10, 16)):
+            self.particles.append({
+                "type"    : "jump_dust",
+                "x"       : float(pos[0] + random.randint(-16, 16)),
+                "y"       : float(pos[1] + random.randint(-2, 4)),
+                "vx"      : random.uniform(-2.2, 2.2),
+                "vy"      : random.uniform(0.4, 2.4),
+                "alpha"   : 210,
+                "fade"    : random.randint(8, 13),
+                "color"   : random.choice([
+                    (105, 108, 112),
+                    (130, 132, 136),
+                    (155, 152, 146),
+                    (92, 96, 104),
+                ]),
+                "size"    : random.randint(2, 5),
+                "drag"    : 0.86,
+                "lifetime": random.randint(16, 28),
+                "age"     : 0,
+            })
+
+    def comet_trail(self, pos: tuple[int, int]) -> None:
+        """Emit a short purple trail behind a falling comet."""
+        for _ in range(random.randint(2, 4)):
+            self.particles.append({
+                "type"    : "comet_trail",
+                "x"       : float(pos[0] + random.randint(-6, 6)),
+                "y"       : float(pos[1] + random.randint(-6, 6)),
+                "vx"      : random.uniform(-0.5, 0.5),
+                "vy"      : random.uniform(-1.6, -0.4),
+                "alpha"   : random.randint(150, 220),
+                "fade"    : random.randint(7, 12),
+                "color"   : random.choice([
+                    PURPLE,
+                    PINK,
+                    (185, 90, 255),
+                    (120, 60, 210),
+                ]),
+                "size"    : random.randint(3, 7),
+                "drag"    : 0.94,
+                "lifetime": random.randint(18, 34),
+                "age"     : 0,
+            })
+
     def crystal_aura(self, pos: tuple[int, int]) -> None:
         """
         Continuously emit upward-floating green sparks for the crystal-grab
@@ -221,8 +267,8 @@ class ParticleSystem:
             p["x"] += p["vx"]
             p["y"] += p["vy"]
 
-            # Horizontal drag for dust particles
-            if p["type"] == "dust":
+            # Horizontal drag for dust/trail particles
+            if "drag" in p:
                 p["vx"] *= p["drag"]
 
             # Sine-wave horizontal wobble for aura particles

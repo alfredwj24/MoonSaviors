@@ -265,10 +265,13 @@ class MainMenu:
 
         # ---- Buttons ----
         btn_cx = SCREEN_WIDTH // 2
-        self._btn_start = _Button("START GAME", btn_cx, 560, self._font_btn)
-        self._btn_quit  = _Button("QUIT",       btn_cx, 630, self._font_btn)
-        self._focused   = 0   # 0 = Start, 1 = Quit  (keyboard navigation)
-        self._buttons   = [self._btn_start, self._btn_quit]
+        self._btn_level1 = _Button("LEVEL 1: CRYSTAL", btn_cx, 520, self._font_btn)
+        self._btn_level2 = _Button("LEVEL 2: ARCADE",  btn_cx, 590, self._font_btn,
+                                   color_normal=PURPLE_DARK,
+                                   color_hover=PURPLE)
+        self._btn_quit   = _Button("QUIT",             btn_cx, 660, self._font_btn)
+        self._focused    = 0
+        self._buttons    = [self._btn_level1, self._btn_level2, self._btn_quit]
         self._buttons[self._focused].selected = True
 
         # ---- Title pulse state ----
@@ -303,8 +306,11 @@ class MainMenu:
             elif event.key in (pygame.K_UP, pygame.K_w):
                 self._set_focus((self._focused - 1) % len(self._buttons))
 
-        if self._btn_start.is_clicked(event, mouse):
+        if self._btn_level1.is_clicked(event, mouse):
             self.next_state = STATE_LEVEL1
+
+        if self._btn_level2.is_clicked(event, mouse):
+            self.next_state = STATE_LEVEL2
 
         if self._btn_quit.is_clicked(event, mouse):
             self.next_state = "QUIT"
@@ -349,7 +355,7 @@ class MainMenu:
                    shadow=True, shadow_offset=(3, 3))
 
         # ---- Subtitle ----
-        _draw_text(surface, "2-PLAYER CO-OP MOON ADVENTURE",
+        _draw_text(surface, "CHOOSE A MISSION",
                    self._font_sub, CYAN,
                    SCREEN_WIDTH // 2, 270)
 
@@ -379,13 +385,15 @@ class MainMenu:
 # ---------------------------------------------------------------------------
 
 # Card layout constants
-_CARD_W  = 210
+_CARD_W  = 190
 _CARD_H  = 380
 _CARD_Y  = SCREEN_HEIGHT // 2 - _CARD_H // 2 + 20
+_CARD_GAP = 28
+_CARD_START_X = (SCREEN_WIDTH - (_CARD_W * 3 + _CARD_GAP * 2)) // 2
 _CARD_XS = [
-    SCREEN_WIDTH // 2 - _CARD_W - 20,   # left card  (Luna)
-    SCREEN_WIDTH // 2 - _CARD_W // 2,   # centre card (Orion)
-    SCREEN_WIDTH // 2 + 20,             # right card  (Nova)
+    _CARD_START_X,
+    _CARD_START_X + _CARD_W + _CARD_GAP,
+    _CARD_START_X + (_CARD_W + _CARD_GAP) * 2,
 ]
 
 # Colour theme per character (used for card border and ability tags)
@@ -450,7 +458,7 @@ class CharacterSelectScreen:
       selection pair.
     """
 
-    def __init__(self):
+    def __init__(self, target_state: str = STATE_LEVEL1):
         # ---- Fonts ----
         self._font_title   = _make_font(FONT_SIZE_MEDIUM, bold=True)
         self._font_name    = _make_font(FONT_SIZE_SMALL,  bold=True)
@@ -489,6 +497,7 @@ class CharacterSelectScreen:
         self.next_state: str | None = None
         self.p1_character: str | None = None
         self.p2_character: str | None = None
+        self._target_state = target_state
 
         # ---- Music ----
         _start_music(MUSIC_CHARACTER_SELECT, volume=0.55)
@@ -545,7 +554,7 @@ class CharacterSelectScreen:
         if self._can_proceed:
             self.p1_character = self._p1_choice
             self.p2_character = self._p2_choice
-            self.next_state   = STATE_LEVEL1
+            self.next_state   = self._target_state
 
     def update(self) -> None:
         """Advance animation timers."""
@@ -1033,9 +1042,11 @@ class GameOverScreen:
 
     FLICKER_PERIOD = 18   # frames per colour cycle
 
-    def __init__(self, score: int = 0, high_score: int = 0):
+    def __init__(self, score: int = 0, high_score: int = 0,
+                 retry_state: str = STATE_LEVEL1):
         self.score      = score
         self.high_score = high_score
+        self.retry_state = retry_state
 
         # ---- Fonts ----
         self._font_title = _make_font(FONT_SIZE_LARGE,  bold=True)
@@ -1079,7 +1090,7 @@ class GameOverScreen:
                 self._set_focus((self._focused - 1) % len(self._buttons))
 
         if self._btn_retry.is_clicked(event, mouse):
-            self.next_state = STATE_LEVEL1
+            self.next_state = self.retry_state
 
         if self._btn_menu.is_clicked(event, mouse):
             self.next_state = STATE_MENU
@@ -1188,13 +1199,9 @@ class WinScreen:
 
         # ---- Buttons ----
         cx = SCREEN_WIDTH // 2
-        self._btn_level2 = _Button(
-            "CONTINUE TO LEVEL 2", cx, 580, self._font_btn,
-            color_normal=PURPLE_DARK, color_hover=PURPLE,
-        )
-        self._btn_menu = _Button("MAIN MENU", cx, 650, self._font_btn)
+        self._btn_menu = _Button("MAIN MENU", cx, 620, self._font_btn)
         self._focused  = 0
-        self._buttons  = [self._btn_level2, self._btn_menu]
+        self._buttons  = [self._btn_menu]
         self._buttons[self._focused].selected = True
 
         # ---- Animation ----
@@ -1214,9 +1221,6 @@ class WinScreen:
                 self._set_focus((self._focused + 1) % len(self._buttons))
             elif event.key in (pygame.K_UP, pygame.K_w, pygame.K_LEFT):
                 self._set_focus((self._focused - 1) % len(self._buttons))
-
-        if self._btn_level2.is_clicked(event, mouse):
-            self.next_state = STATE_LEVEL2
 
         if self._btn_menu.is_clicked(event, mouse):
             self.next_state = STATE_MENU
@@ -1267,7 +1271,7 @@ class WinScreen:
         # ---- Prompt to continue ----
         prompt_alpha = int(160 + 95 * math.sin(self._pulse * 1.4))
         prompt_surf  = self._font_sub.render(
-            "The Moon needs you — ascend further!",
+            "Choose another mission from the menu.",
             True, CYAN,
         )
         prompt_surf.set_alpha(prompt_alpha)

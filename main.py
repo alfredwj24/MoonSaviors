@@ -236,6 +236,8 @@ class Game:
         # choices without going back to the select screen.
         self._p1_char: str | None = None
         self._p2_char: str | None = None
+        self._pending_level: str = STATE_LEVEL1
+        self._last_level_state: str = STATE_LEVEL1
 
         # ---- Player instances (created when entering a level) ----
         # Kept as instance variables so the HUD and win/game-over screens
@@ -363,8 +365,9 @@ class Game:
         if self._state == STATE_MENU:
             self._active_object.update()
             next_s = getattr(self._active_object, "next_state", None)
-            if next_s == STATE_LEVEL1:
-                # Go to character select before starting the level
+            if next_s in (STATE_LEVEL1, STATE_LEVEL2):
+                # Go to character select before starting the chosen level
+                self._pending_level = next_s
                 self._enter_state(STATE_CHARACTER_SELECT)
             elif next_s == "QUIT":
                 self._state = "QUIT"
@@ -375,11 +378,11 @@ class Game:
         elif self._state == STATE_CHARACTER_SELECT:
             self._active_object.update()
             next_s = getattr(self._active_object, "next_state", None)
-            if next_s == STATE_LEVEL1:
+            if next_s in (STATE_LEVEL1, STATE_LEVEL2):
                 # Store character choices for both players
                 self._p1_char = self._active_object.p1_character
                 self._p2_char = self._active_object.p2_character
-                self._enter_state(STATE_LEVEL1)
+                self._enter_state(next_s)
 
         # ----------------------------------------------------------------
         # LEVEL 1 — Rescue Mission
@@ -428,9 +431,7 @@ class Game:
         elif self._state == STATE_WIN:
             self._active_object.update()
             next_s = getattr(self._active_object, "next_state", None)
-            if next_s == STATE_LEVEL2:
-                self._enter_state(STATE_LEVEL2)
-            elif next_s == STATE_MENU:
+            if next_s == STATE_MENU:
                 self._enter_state(STATE_MENU)
 
         # ----------------------------------------------------------------
@@ -439,9 +440,9 @@ class Game:
         elif self._state == STATE_GAME_OVER:
             self._active_object.update()
             next_s = getattr(self._active_object, "next_state", None)
-            if next_s == STATE_LEVEL1:
+            if next_s in (STATE_LEVEL1, STATE_LEVEL2):
                 # Retry: recreate players with fresh lives, same characters
-                self._enter_state(STATE_LEVEL1)
+                self._enter_state(next_s)
             elif next_s == STATE_MENU:
                 self._enter_state(STATE_MENU)
 
@@ -567,10 +568,13 @@ class Game:
             self.audio.play_music(MUSIC_LEVEL1, loops=-1)
 
         elif new_state == STATE_CHARACTER_SELECT:
-            self._active_object = CharacterSelectScreen()
+            self._active_object = CharacterSelectScreen(self._pending_level)
             self.audio.play_music(MUSIC_CHARACTER_SELECT, loops=-1)
 
         elif new_state == STATE_LEVEL1:
+            self._last_level_state = STATE_LEVEL1
+            self._final_score = 0
+            self._final_high_score = 0
             # ---- Create fresh player instances ----
             # If character choices are set (from CharacterSelectScreen), use
             # them; otherwise fall back to sensible defaults so the game can
@@ -621,33 +625,21 @@ class Game:
             self.audio.play_music(MUSIC_LEVEL1, loops=-1)
 
         elif new_state == STATE_LEVEL2:
-            # ---- Reuse existing player instances if available ----
-            # Players carry over their crystal count from Level 1 but their
-            # lives are reset to give them a fair start in the harder level.
-            if self._player1 and self._player2:
-                self._player1.lives = PLAYER_LIVES
-                self._player2.lives = PLAYER_LIVES
-                self._player1.alive = True
-                self._player2.alive = True
-                self._player1.velocity_x = 0
-                self._player1.velocity_y = 0
-                self._player2.velocity_x = 0
-                self._player2.velocity_y = 0
-            else:
-                # Fallback: create fresh players if somehow entering Level 2
-                # directly (e.g. developer shortcut)
-                p1_char = self._p1_char or CHAR_LUNA
-                p2_char = self._p2_char or CHAR_NOVA
-                self._player1 = create_player(
-                    p1_char,
-                    x=SCREEN_WIDTH // 4, y=SCREEN_HEIGHT - 200,
-                    controls=CONTROLS_P1, screen_effect=self.screen_effect,
-                )
-                self._player2 = create_player(
-                    p2_char,
-                    x=3 * SCREEN_WIDTH // 4, y=SCREEN_HEIGHT - 200,
-                    controls=CONTROLS_P2, screen_effect=self.screen_effect,
-                )
+            self._last_level_state = STATE_LEVEL2
+            self._final_score = 0
+            self._final_high_score = 0
+            p1_char = self._p1_char or CHAR_LUNA
+            p2_char = self._p2_char or CHAR_NOVA
+            self._player1 = create_player(
+                p1_char,
+                x=SCREEN_WIDTH // 4, y=SCREEN_HEIGHT - 200,
+                controls=CONTROLS_P1, screen_effect=self.screen_effect,
+            )
+            self._player2 = create_player(
+                p2_char,
+                x=3 * SCREEN_WIDTH // 4, y=SCREEN_HEIGHT - 200,
+                controls=CONTROLS_P2, screen_effect=self.screen_effect,
+            )
 
             # ---- Build level ----
             self._active_object = Level2(self.screen_effect)
@@ -662,11 +654,11 @@ class Game:
             self._player1.reset_position(SCREEN_WIDTH // 4,     lv2_start_y)
             self._player2.reset_position(3 * SCREEN_WIDTH // 4, lv2_start_y)
 
-            # Reuse or recreate HUD
-            if self._hud is None:
-                p1_name = (self._p1_char or CHAR_LUNA).upper()
-                p2_name = (self._p2_char or CHAR_NOVA).upper()
-                self._hud = HUD(p1_name=p1_name, p2_name=p2_name)
+            # ---- HUD ----
+            self._hud = HUD(
+                p1_name = p1_char.upper(),
+                p2_name = p2_char.upper(),
+            )
 
             self.audio.play_music(MUSIC_LEVEL2, loops=-1)
 
@@ -685,6 +677,7 @@ class Game:
             self._active_object = GameOverScreen(
                 score      = self._final_score,
                 high_score = self._final_high_score,
+                retry_state = self._last_level_state,
             )
             self.audio.stop_music()
 
