@@ -38,6 +38,7 @@ from config import (
     COMET_SPEED_MIN, COMET_SPEED_MAX,
     COMET_SPAWN_INTERVAL, COMET_WIDTH, COMET_HEIGHT,
     COMET_INTERVAL_L2_MIN,
+    COMET_INTERVAL_L2_VERY_RARE, COMET_INTERVAL_L2_RARE,
     L2_COMET_RAMP_HEIGHT, L2_COMET_RAMP_STEP,
     # Moonquake
     MOONQUAKE_INTERVAL, MOONQUAKE_SHAKE_MAGNITUDE,
@@ -407,12 +408,17 @@ class Platform:
         if self.broken:
             return
 
-        # Hidden platforms that are not yet revealed are invisible
-        if self.hidden and not self.revealed:
-            return
-
         draw_x = self.rect.x + self._shake_offset
         draw_y = self.rect.y - scroll_y
+
+        # Unrevealed hidden platforms are only a faint white ghost silhouette.
+        # They remain non-collidable until Nova's spark trail reveals them.
+        if self.hidden and not self.revealed:
+            ghost = self._img.copy()
+            ghost.fill((255, 255, 255, 0), special_flags=pygame.BLEND_RGBA_MAX)
+            ghost.set_alpha(38)
+            surface.blit(ghost, (draw_x, draw_y))
+            return
 
         # Partially transparent if revealed but fading (last 30 frames)
         alpha = 255
@@ -1037,8 +1043,8 @@ class Level2:
     ----------------------------
     • Platforms are generated ahead of the player as they climb (never a
       fixed set).
-    • L2_HIDDEN_PLATFORM_CHANCE % of platforms are hidden (alpha=0) until
-      Nova's spark trail passes over them.
+    • L2_HIDDEN_PLATFORM_CHANCE % of platforms are hidden and intangible
+      until Nova's spark trail reaches them.
     • Comet spawn rate increases every L2_COMET_RAMP_HEIGHT pixels of height.
     • There is no win condition — the level runs until both players are dead.
     • A height-based score is tracked and compared against the high score.
@@ -1088,8 +1094,8 @@ class Level2:
 
         # ---- Comets ----
         self.comets: list[Comet]  = []
-        self._comet_timer: int    = COMET_SPAWN_INTERVAL
-        self._comet_interval: int = COMET_SPAWN_INTERVAL  # shrinks as player climbs
+        self._comet_timer: int    = COMET_INTERVAL_L2_VERY_RARE
+        self._comet_interval: int = COMET_INTERVAL_L2_VERY_RARE
 
         # ---- Platforms ----
         self.platforms: list[Platform] = []
@@ -1229,7 +1235,7 @@ class Level2:
           2. Scroll to follow the highest alive player.
           3. Generate new platforms ahead.
           4. Update platform crumble timers; remove broken/off-screen ones.
-          5. Update hidden-platform reveal (Nova's spark trail).
+          5. Update hidden-platform reveal from Nova's spark trail.
           6. Spawn and update comets; scale spawn rate with height.
           7. Moonquake check.
           8. Game-over check (both players dead).
@@ -1298,8 +1304,8 @@ class Level2:
                 player.freeze_nearby(self.platforms)
 
         # ---- 5. Nova hidden-platform reveal ----
-        # For each Nova player, check her spark trail against hidden platforms.
-        # A platform within the trail's bounding rect is revealed temporarily.
+        # Hidden platforms stay invisible and intangible until Nova's active
+        # spark-trail effect intersects their world-space collision rectangle.
         for player in players:
             if not hasattr(player, "get_reveal_rect"):
                 continue
@@ -1307,22 +1313,23 @@ class Level2:
             if reveal_rect is None:
                 continue
             for plat in self.platforms:
-                if not plat.hidden:
-                    continue
-                # Both reveal_rect and plat.rect are in world space,
-                # so compare directly without any scroll conversion.
-                if reveal_rect.colliderect(plat.rect):
-                    # Reveal for the spark-trail duration defined in config
+                if plat.hidden and reveal_rect.colliderect(plat.rect):
                     from config import NOVA_SPARK_DURATION
                     plat.reveal(NOVA_SPARK_DURATION)
 
         # ---- 6. Comets ----
-        # Scale spawn rate: every L2_COMET_RAMP_HEIGHT pixels, reduce interval
-        ramp_steps = max(0, self._height_gained // L2_COMET_RAMP_HEIGHT)
-        self._comet_interval = max(
-            COMET_INTERVAL_L2_MIN,
-            COMET_SPAWN_INTERVAL - ramp_steps * L2_COMET_RAMP_STEP,
-        )
+        # Early arcade runs get breathing room. At 1500+ points, restore the
+        # existing height-based rate and minimum interval.
+        if self.score < 1000:
+            self._comet_interval = COMET_INTERVAL_L2_VERY_RARE
+        elif self.score < 1500:
+            self._comet_interval = COMET_INTERVAL_L2_RARE
+        else:
+            ramp_steps = max(0, self._height_gained // L2_COMET_RAMP_HEIGHT)
+            self._comet_interval = max(
+                COMET_INTERVAL_L2_MIN,
+                COMET_SPAWN_INTERVAL - ramp_steps * L2_COMET_RAMP_STEP,
+            )
 
         self._comet_timer -= 1
         if self._comet_timer <= 0:

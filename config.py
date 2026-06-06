@@ -59,9 +59,15 @@ BG_LEVEL2          = asset("backgrounds/Level 2 Background.jpg")
 # ASSET PATHS — Characters
 # ---------------------------------------------------------------------------
 
-SPRITE_LUNA  = asset("characters/luna sprite.png")
-SPRITE_NOVA  = asset("characters/nova sprite.png")
-SPRITE_ORION = asset("characters/orion sprite.png")
+SPRITE_LUNA  = asset("characters/Luna idle.png")
+SPRITE_NOVA  = asset("characters/Nova idle.png")
+SPRITE_ORION = asset("characters/Orion idle.png")
+SPRITE_LUNA_WALK_EAST  = asset("characters/Luna walk east.png")
+SPRITE_LUNA_WALK_WEST  = asset("characters/Luna walk west.png")
+SPRITE_NOVA_WALK_EAST  = asset("characters/Nova walking east.png")
+SPRITE_NOVA_WALK_WEST  = asset("characters/Nova walking west.png")
+SPRITE_ORION_WALK_EAST = asset("characters/Orion walk east.png")
+SPRITE_ORION_WALK_WEST = asset("characters/Orion walk west.png")
 
 # ---------------------------------------------------------------------------
 # ASSET PATHS — Effects
@@ -150,7 +156,7 @@ ORION_FREEZE_DURATION  = 180  # frames (3 s at 60 FPS) platforms stay frozen
 
 NOVA_DASH_SPEED        = 14   # px/frame — Nova's horizontal dash velocity
 NOVA_DASH_DURATION     = 12   # frames the dash lasts
-NOVA_SPARK_DURATION    = 300  # frames (5 s) hidden platforms stay revealed
+NOVA_SPARK_DURATION    = 300  # frames (5 s) Nova's spark trail remains active
 
 # ---------------------------------------------------------------------------
 # SPECIAL ABILITY COOLDOWNS  (in frames at 60 FPS)
@@ -189,6 +195,9 @@ COMET_WIDTH          = 48   # px — hitbox / display size
 COMET_HEIGHT         = 48   # px
 
 # ---------------------------------------------------------------------------
+COMET_INTERVAL_L2_VERY_RARE = 10 * FPS  # score 0-999: about one every 10 seconds
+COMET_INTERVAL_L2_RARE      = 6 * FPS   # score 1000-1499: about one every 6 seconds
+
 # MOONQUAKE SETTINGS
 # ---------------------------------------------------------------------------
 

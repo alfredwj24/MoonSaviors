@@ -36,6 +36,9 @@ from config import (
     PLAYER_LIVES,
     # Sprite paths
     SPRITE_LUNA, SPRITE_NOVA, SPRITE_ORION,
+    SPRITE_LUNA_WALK_EAST, SPRITE_LUNA_WALK_WEST,
+    SPRITE_NOVA_WALK_EAST, SPRITE_NOVA_WALK_WEST,
+    SPRITE_ORION_WALK_EAST, SPRITE_ORION_WALK_WEST,
     # Controls
     P1_LEFT, P1_RIGHT, P1_JUMP, P1_DOWN, P1_SPECIAL,
     P2_LEFT, P2_RIGHT, P2_JUMP, P2_DOWN, P2_SPECIAL,
@@ -155,9 +158,12 @@ class Player:
         x: float,
         y: float,
         sprite_path: str,
+        walk_east_path: str,
+        walk_west_path: str,
         controls: dict,
         fallback_color: tuple = (200, 200, 200),
         screen_effect=None,   # ScreenEffect instance injected by main.py
+        align_visual_bottom: bool = False,
     ):
         # ---- Position & physics ----
         self.x: float = float(x)
@@ -180,12 +186,30 @@ class Player:
         self.controls = controls
 
         # ---- Visual ----
-        self._sprite_orig = _load_sprite(
+        self._sprite_idle = _load_sprite(
             sprite_path,
             (self.SPRITE_WIDTH, self.SPRITE_HEIGHT),
             fallback_color,
         )
-        self._sprite = self._sprite_orig   # current frame (may be flipped)
+        self._sprite_walk_east = _load_sprite(
+            walk_east_path,
+            (self.SPRITE_WIDTH, self.SPRITE_HEIGHT),
+            fallback_color,
+        )
+        self._sprite_walk_west = _load_sprite(
+            walk_west_path,
+            (self.SPRITE_WIDTH, self.SPRITE_HEIGHT),
+            fallback_color,
+        )
+        self._sprite = self._sprite_idle
+        self._sprite_y_offsets = {}
+        for sprite in (self._sprite_idle, self._sprite_walk_east, self._sprite_walk_west):
+            visible_rect = sprite.get_bounding_rect(min_alpha=1)
+            self._sprite_y_offsets[id(sprite)] = (
+                self.SPRITE_HEIGHT - visible_rect.bottom
+                if align_visual_bottom and visible_rect.height > 0
+                else 0
+            )
 
         # ---- Collision rectangle ----
         # Rect is kept in sync with (self.x, self.y) every frame.
@@ -307,13 +331,13 @@ class Player:
         self.rect.x = int(self.x)
         self.rect.y = int(self.y)
 
-        # --- 7. Sprite orientation ---
-        if self.facing_right:
-            self._sprite = self._sprite_orig
+        # --- 7. Sprite state ---
+        if moving and self.facing_right:
+            self._sprite = self._sprite_walk_east
+        elif moving:
+            self._sprite = self._sprite_walk_west
         else:
-            # pygame.transform.flip returns a new surface; the original is
-            # never mutated so flipping is cheap and correct every frame.
-            self._sprite = pygame.transform.flip(self._sprite_orig, True, False)
+            self._sprite = self._sprite_idle
 
         # --- 8. Subclass ability hook ---
         self._update_abilities(keys)
@@ -476,7 +500,7 @@ class Player:
         """
         # screen_y = world_y - scroll_y  (Pygame y-axis: 0 = top of screen)
         screen_x = int(self.x)
-        screen_y = int(self.y) - scroll_y
+        screen_y = int(self.y) - scroll_y + self._sprite_y_offsets[id(self._sprite)]
         surface.blit(self._sprite, (screen_x, screen_y))
         if self._jump_dust_pending:
             if self.particle_system:
@@ -544,6 +568,8 @@ class Luna(Player):
         super().__init__(
             x, y,
             sprite_path    = SPRITE_LUNA,
+            walk_east_path = SPRITE_LUNA_WALK_EAST,
+            walk_west_path = SPRITE_LUNA_WALK_WEST,
             controls       = controls,
             fallback_color = CYAN,
             screen_effect  = screen_effect,
@@ -709,6 +735,8 @@ class Orion(Player):
         super().__init__(
             x, y,
             sprite_path    = SPRITE_ORION,
+            walk_east_path = SPRITE_ORION_WALK_EAST,
+            walk_west_path = SPRITE_ORION_WALK_WEST,
             controls       = controls,
             fallback_color = GOLD,
             screen_effect  = screen_effect,
@@ -883,9 +911,12 @@ class Nova(Player):
         super().__init__(
             x, y,
             sprite_path    = SPRITE_NOVA,
+            walk_east_path = SPRITE_NOVA_WALK_EAST,
+            walk_west_path = SPRITE_NOVA_WALK_WEST,
             controls       = controls,
             fallback_color = PINK,
             screen_effect  = screen_effect,
+            align_visual_bottom = True,
         )
         # Apply permanent speed bonus
         self.move_speed = PLAYER_WALK_SPEED * self.SPEED_MULTIPLIER
