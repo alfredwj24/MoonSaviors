@@ -39,6 +39,10 @@ from config import (
     SPRITE_LUNA_WALK_EAST, SPRITE_LUNA_WALK_WEST,
     SPRITE_NOVA_WALK_EAST, SPRITE_NOVA_WALK_WEST,
     SPRITE_ORION_WALK_EAST, SPRITE_ORION_WALK_WEST,
+    SPRITE_LUNA_JUMP_EAST, SPRITE_LUNA_JUMP_WEST,
+    SPRITE_NOVA_JUMP_EAST, SPRITE_NOVA_JUMP_WEST,
+    SPRITE_ORION_JUMP_EAST, SPRITE_ORION_JUMP_WEST,
+    SPRITE_LUNA_JUMP_IDLE, SPRITE_NOVA_JUMP_IDLE, SPRITE_ORION_JUMP_IDLE,
     # Controls
     P1_LEFT, P1_RIGHT, P1_JUMP, P1_DOWN, P1_SPECIAL,
     P2_LEFT, P2_RIGHT, P2_JUMP, P2_DOWN, P2_SPECIAL,
@@ -160,6 +164,9 @@ class Player:
         sprite_path: str,
         walk_east_path: str,
         walk_west_path: str,
+        jump_east_path: str,
+        jump_west_path: str,
+        jump_idle_path: str,
         controls: dict,
         fallback_color: tuple = (200, 200, 200),
         screen_effect=None,   # ScreenEffect instance injected by main.py
@@ -201,9 +208,31 @@ class Player:
             (self.SPRITE_WIDTH, self.SPRITE_HEIGHT),
             fallback_color,
         )
+        self._sprite_jump_east = _load_sprite(
+            jump_east_path,
+            (self.SPRITE_WIDTH, self.SPRITE_HEIGHT),
+            fallback_color,
+        )
+        self._sprite_jump_west = _load_sprite(
+            jump_west_path,
+            (self.SPRITE_WIDTH, self.SPRITE_HEIGHT),
+            fallback_color,
+        )
+        self._sprite_jump_idle = _load_sprite(
+            jump_idle_path,
+            (self.SPRITE_WIDTH, self.SPRITE_HEIGHT),
+            fallback_color,
+        )
         self._sprite = self._sprite_idle
         self._sprite_y_offsets = {}
-        for sprite in (self._sprite_idle, self._sprite_walk_east, self._sprite_walk_west):
+        for sprite in (
+            self._sprite_idle,
+            self._sprite_walk_east,
+            self._sprite_walk_west,
+            self._sprite_jump_east,
+            self._sprite_jump_west,
+            self._sprite_jump_idle,
+        ):
             visible_rect = sprite.get_bounding_rect(min_alpha=1)
             self._sprite_y_offsets[id(sprite)] = (
                 self.SPRITE_HEIGHT - visible_rect.bottom
@@ -234,6 +263,7 @@ class Player:
 
         # ---- Jump tracking ----
         self._jump_pressed_last: bool = False   # edge-detect for jump key
+        self._jump_started_moving: bool = False
         self._jump_dust_pending: bool = False
         self._landing_dust_pending: bool = False
 
@@ -331,22 +361,34 @@ class Player:
         self.rect.x = int(self.x)
         self.rect.y = int(self.y)
 
-        # --- 7. Sprite state ---
-        if moving and self.facing_right:
-            self._sprite = self._sprite_walk_east
-        elif moving:
-            self._sprite = self._sprite_walk_west
-        else:
-            self._sprite = self._sprite_idle
-
-        # --- 8. Subclass ability hook ---
+        # --- 7. Subclass ability hook ---
         self._update_abilities(keys)
 
         # --- Jump (edge-detect so one key-press = one jump) ---
         jump_held = bool(keys[self.controls["jump"]])
         if jump_held and not self._jump_pressed_last:
+            if self.on_ground or getattr(self, "_can_double_jump", False):
+                self._jump_started_moving = moving
             self.jump()
         self._jump_pressed_last = jump_held
+
+        # --- Sprite state ---
+        if not self.on_ground:
+            if not self._jump_started_moving:
+                self._sprite = self._sprite_jump_idle
+            else:
+                self._sprite = (
+                    self._sprite_jump_east
+                    if self.facing_right
+                    else self._sprite_jump_west
+                )
+        elif moving and self.facing_right:
+            self._sprite = self._sprite_walk_east
+        elif moving:
+            self._sprite = self._sprite_walk_west
+        else:
+            self._sprite = self._sprite_idle
+            self._jump_started_moving = False
 
         # --- Special ability (edge-detect) ---
         special_held = bool(keys[self.controls["special"]])
@@ -526,6 +568,7 @@ class Player:
         self.x, self.y = float(x), float(y)
         self.velocity_x = self.velocity_y = 0.0
         self.on_ground  = False
+        self._jump_started_moving = False
         self._jump_dust_pending = False
         self._landing_dust_pending = False
         self.rect.topleft = (int(self.x), int(self.y))
@@ -570,6 +613,9 @@ class Luna(Player):
             sprite_path    = SPRITE_LUNA,
             walk_east_path = SPRITE_LUNA_WALK_EAST,
             walk_west_path = SPRITE_LUNA_WALK_WEST,
+            jump_east_path = SPRITE_LUNA_JUMP_EAST,
+            jump_west_path = SPRITE_LUNA_JUMP_WEST,
+            jump_idle_path = SPRITE_LUNA_JUMP_IDLE,
             controls       = controls,
             fallback_color = CYAN,
             screen_effect  = screen_effect,
@@ -737,6 +783,9 @@ class Orion(Player):
             sprite_path    = SPRITE_ORION,
             walk_east_path = SPRITE_ORION_WALK_EAST,
             walk_west_path = SPRITE_ORION_WALK_WEST,
+            jump_east_path = SPRITE_ORION_JUMP_EAST,
+            jump_west_path = SPRITE_ORION_JUMP_WEST,
+            jump_idle_path = SPRITE_ORION_JUMP_IDLE,
             controls       = controls,
             fallback_color = GOLD,
             screen_effect  = screen_effect,
@@ -913,6 +962,9 @@ class Nova(Player):
             sprite_path    = SPRITE_NOVA,
             walk_east_path = SPRITE_NOVA_WALK_EAST,
             walk_west_path = SPRITE_NOVA_WALK_WEST,
+            jump_east_path = SPRITE_NOVA_JUMP_EAST,
+            jump_west_path = SPRITE_NOVA_JUMP_WEST,
+            jump_idle_path = SPRITE_NOVA_JUMP_IDLE,
             controls       = controls,
             fallback_color = PINK,
             screen_effect  = screen_effect,

@@ -68,6 +68,15 @@ SPRITE_NOVA_WALK_EAST  = asset("characters/Nova walking east.png")
 SPRITE_NOVA_WALK_WEST  = asset("characters/Nova walking west.png")
 SPRITE_ORION_WALK_EAST = asset("characters/Orion walk east.png")
 SPRITE_ORION_WALK_WEST = asset("characters/Orion walk west.png")
+SPRITE_LUNA_JUMP_EAST  = asset("characters/Luna jump east.png")
+SPRITE_LUNA_JUMP_WEST  = asset("characters/Luna jump west.png")
+SPRITE_NOVA_JUMP_EAST  = asset("characters/Nova jump east.png")
+SPRITE_NOVA_JUMP_WEST  = asset("characters/Nova jump west.png")
+SPRITE_ORION_JUMP_EAST = asset("characters/Orion jump east.png")
+SPRITE_ORION_JUMP_WEST = asset("characters/Orion jump west.png")
+SPRITE_LUNA_JUMP_IDLE  = asset("characters/Luna jump.png")
+SPRITE_NOVA_JUMP_IDLE  = asset("characters/Nova jump.png")
+SPRITE_ORION_JUMP_IDLE = asset("characters/Orion jump.png")
 
 # ---------------------------------------------------------------------------
 # ASSET PATHS — Effects
